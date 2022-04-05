@@ -1,0 +1,293 @@
+
+(bact_IDs, bact_orientations) = glob_wildcards("data/raw/16S/{id}_L001_{orientation}_001.fastq.gz")
+(euk_IDs, euk_orientations) = glob_wildcards("data/raw/18S/{id}_L001_{orientation}_001.fastq.gz")
+
+
+
+#########
+# FastQC and MultiQC analyses
+#########
+
+IDs, = glob_wildcards("data/raw/{id}_L001_R1_001.fastq.gz")
+
+rule fastqc:
+  input:
+    for_read="data/raw/{id}_L001_R1_001.fastq.gz",
+    rev_read="data/raw/{id}_L001_R2_001.fastq.gz"
+  output:
+    htmls=temp("data/qc/{id}_R1_fastqc.html"),
+  shell:
+    """
+    touch {output.htmls}
+    fastqc -o data/qc {input.for_read} {input.rev_read}
+    """
+
+
+rule multiqc:
+  input:
+    data=expand(rules.fastqc.output.htmls, id=IDs)
+  output:
+    directory("data/mqc/")
+  shell:
+    """
+    multiqc data -o {output}
+    """
+
+
+#########
+# Calculate quality profiles
+#########
+
+rule qual_profiles_bacteria:
+  input:
+    for_read="data/raw/16S/{id}_L001_{orientation}_001.fastq.gz",
+  output:
+    for_fig="data/quality/profiles/16S/{id}_{orientation}.pdf",
+  script:
+    "src/data/qual_profiles.R"
+
+
+rule qual_profiles_eukaryotes:
+  input:
+    for_read="data/raw/18S/{id}_L001_{orientation}_001.fastq.gz",
+  output:
+    for_fig="data/quality/profiles/18S/{id}_{orientation}.pdf",
+  script:
+    "src/data/qual_profiles.R"
+
+
+#########
+# Filter and trim amplicons
+#########
+
+# Reserve at least 32Gb memory for this
+rule filter_and_trim_bacteria:
+  input:
+    for_reads=expand("data/raw/16S/{id}_L001_R1_001.fastq.gz", id=bact_IDs),
+    rev_reads=expand("data/raw/16S/{id}_L001_R2_001.fastq.gz", id=bact_IDs)
+  output:
+    for_reads=expand("data/filtered/16S/{id}_R1_filt.fastq.gz", id=bact_IDs),
+    rev_reads=expand("data/filtered/16S/{id}_R2_filt.fastq.gz", id=bact_IDs),
+    out_rds="data/filtered/16S_filtered_out.RDS",
+  params:
+    truncLen = 0,
+    maxEE=[2, 2]
+  script:
+    "src/data/filter_and_trim.R"
+
+
+# Reserve at least 32Gb memory for this
+rule filter_and_trim_eukaryotes:
+  input:
+    for_reads=expand("data/raw/18S/{id}_L001_R1_001.fastq.gz", id=euk_IDs),
+    rev_reads=expand("data/raw/18S/{id}_L001_R2_001.fastq.gz", id=euk_IDs)
+  output:
+    for_reads=expand("data/filtered/18S/{id}_R1_filt.fastq.gz", id=euk_IDs),
+    rev_reads=expand("data/filtered/18S/{id}_R2_filt.fastq.gz", id=euk_IDs),
+    out_rds="data/filtered/18S_filtered_out.RDS",
+  params:
+    truncLen = 0,
+    maxEE=[2, 2]
+  script:
+    "src/data/filter_and_trim.R"
+
+
+#########
+# Learn error rates
+#########
+
+rule learn_errors_bacteria:
+  input:
+    for_reads=expand("data/filtered/16S/{id}_R1_filt.fastq.gz", id=bact_IDs),
+    rev_reads=expand("data/filtered/16S/{id}_R2_filt.fastq.gz", id=bact_IDs)
+  output:
+    for_errors="data/errors/16S_for_errors.RDS",
+    rev_errors="data/errors/16S_rev_errors.RDS",
+    for_error_plots="data/errors/16S_for_error_plots.pdf",
+    rev_error_plots="data/errors/16S_rev_error_plots.pdf"
+  script:
+    "src/data/learn_errors.R"
+
+
+rule learn_errors_eukaryotes:
+  input:
+    for_reads=expand("data/filtered/18S/{id}_R1_filt.fastq.gz", id=euk_IDs),
+    rev_reads=expand("data/filtered/18S/{id}_R2_filt.fastq.gz", id=euk_IDs)
+  output:
+    for_errors="data/errors/18S_for_errors.RDS",
+    rev_errors="data/errors/18S_rev_errors.RDS",
+    for_error_plots="data/errors/18S_for_error_plots.pdf",
+    rev_error_plots="data/errors/18S_rev_error_plots.pdf"
+  script:
+    "src/data/learn_errors.R"
+
+
+#########
+# Infer sample composition
+#########
+
+rule infer_samples_bacteria:
+    input:
+      for_reads=expand("data/filtered/16S/{id}_R1_filt.fastq.gz", id=bact_IDs),
+      rev_reads=expand("data/filtered/16S/{id}_R2_filt.fastq.gz", id=bact_IDs),
+    	for_errors="data/errors/16S_for_errors.RDS",
+    	rev_errors="data/errors/16S_rev_errors.RDS"
+    output:
+    	for_samples="data/samples/16S_dadaFs.RDS",
+    	rev_samples="data/samples/16S_dadaRs.RDS"
+    script:
+      "src/data/infer_samples.R"
+
+
+rule infer_samples_eukaryotes:
+    input:
+      for_reads=expand("data/filtered/18S/{id}_R1_filt.fastq.gz", id=euk_IDs),
+      rev_reads=expand("data/filtered/18S/{id}_R2_filt.fastq.gz", id=euk_IDs),
+    	for_errors="data/errors/18S_for_errors.RDS",
+    	rev_errors="data/errors/18S_rev_errors.RDS"
+    output:
+    	for_samples="data/samples/18S_dadaFs.RDS",
+    	rev_samples="data/samples/18S_dadaRs.RDS"
+    script:
+      "src/data/infer_samples.R"
+
+
+#########
+# Merge reads
+#########
+
+rule merge_reads_bacteria:
+    input:
+      for_reads=expand("data/filtered/16S/{id}_R1_filt.fastq.gz", id=bact_IDs),
+      rev_reads=expand("data/filtered/16S/{id}_R2_filt.fastq.gz", id=bact_IDs),
+    	for_samples="data/samples/16S_dadaFs.RDS",
+    	rev_samples="data/samples/16S_dadaRs.RDS"
+    output:
+    	merged_samples="data/samples/16S_merged.RDS"
+    script:
+      "src/data/merge_reads.R"
+
+
+rule merge_reads_eukaryotes:
+    input:
+      for_reads=expand("data/filtered/18S/{id}_R1_filt.fastq.gz", id=euk_IDs),
+      rev_reads=expand("data/filtered/18S/{id}_R2_filt.fastq.gz", id=euk_IDs),
+    	for_samples="data/samples/18S_dadaFs.RDS",
+    	rev_samples="data/samples/18S_dadaRs.RDS"
+    output:
+    	merged_samples="data/samples/18S_merged.RDS"
+    script:
+      "src/data/merge_reads.R"
+
+
+#########
+# Construct ASV tables
+#########
+
+rule make_sequence_table_bacteria:
+  input:
+    out_rds="data/filtered/16S_filtered_out.RDS",
+    for_samples="data/samples/16S_dadaFs.RDS",
+    rev_samples="data/samples/16S_dadaRs.RDS",
+    merged_samples="data/samples/16S_merged.RDS",
+    for_reads=expand("data/raw/16S/{id}_L001_R1_001.fastq.gz", id=bact_IDs)
+  output:
+    len_distr="data/results/16S_length_distribution.csv",
+    sample_stats="data/results/16S_sample_stats.csv",
+    seqtab_nochim="data/results/16S_seqtab_nochim.RDS",
+    taxa="data/results/16S_taxa.RDS"
+  params:
+    tax_db="resources/SILVA_SSU_r138_2019.RData"
+  script:
+    "src/data/make_sequence_table.R"
+
+
+rule make_sequence_table_eukaryotes:
+  input:
+    out_rds="data/filtered/18S_filtered_out.RDS",
+    for_samples="data/samples/18S_dadaFs.RDS",
+    rev_samples="data/samples/18S_dadaRs.RDS",
+    merged_samples="data/samples/18S_merged.RDS",
+    for_reads=expand("data/raw/18S/{id}_L001_R1_001.fastq.gz", id=euk_IDs)
+  output:
+    len_distr="data/results/18S_length_distribution.csv",
+    sample_stats="data/results/18S_sample_stats.csv",
+    seqtab_nochim="data/results/18S_seqtab_nochim.RDS",
+    taxa="data/results/18S_taxa.RDS"
+  params:
+    tax_db="resources/SILVA_SSU_r138_2019.RData"
+  script:
+    "src/data/make_sequence_table.R"
+# silva_nr99_v138_train_set.fa.gz
+
+
+#########
+# Create Phyloseq objects
+#########
+
+rule create_phyloseq:
+    input:
+      bact_seqtab_nochim="data/results/16S_seqtab_nochim.RDS",
+      bact_taxa="data/results/16S_taxa.RDS",
+      euk_seqtab_nochim="data/results/18S_seqtab_nochim.RDS",
+      euk_taxa="data/results/18S_taxa.RDS",
+      samples="big_mp_samples.csv",
+    output:
+      bact_phyloseq="data/results/16S_phyloseq.RDS",
+      euk_phyloseq="data/results/18S_phyloseq.RDS"
+    script:
+      "src/data/create_phyloseq_objects.R"
+
+
+#########
+# Create RDA ordinations
+#########
+
+rule create_ordinations:
+    input:
+      bact_phyloseq="data/results/16S_phyloseq.RDS",
+      euk_phyloseq="data/results/18S_phyloseq.RDS"
+    output:
+      bact_rda="results/visualization/bact_rda.pdf",
+      euk_rda="results/visualization/euk_rda.pdf",
+      bact_rda_norm="results/visualization/bact_rda_norm.pdf",
+      euk_rda_norm="results/visualization/euk_rda_norm.pdf",
+      bact_species="results/tables/rda_key_bacteria.csv",
+      euk_species="results/tables/rda_key_eukaryota.csv",
+      bact_otus="results/tables/bact_asv_table.csv",
+      euk_otus="results/tables/euk_asv_table.csv"
+    script:
+      "src/data/create_ordinations.R"
+
+
+#########
+# Export sequences
+#########
+
+rule export_sequences:
+    input:
+      bact_phyloseq="data/results/16S_phyloseq.RDS",
+      euk_phyloseq="data/results/18S_phyloseq.RDS"
+    output:
+      bact_rda="results/sequences/bact_asv.fasta",
+      euk_rda="results/sequences/euk_asv.fasta",
+    script:
+      "src/data/export_sequences.R"
+
+
+#########
+# Create diversity indexes
+#########
+
+rule create_diversity_indexes:
+    input:
+      bact_phyloseq="data/results/16S_phyloseq.RDS",
+      euk_phyloseq="data/results/18S_phyloseq.RDS"
+    output:
+      bact_div="results/visualization/bact_diversity.pdf",
+      euk_div="results/visualization/euk_diversity.pdf",
+      pval_table="results/tables/pval_table.csv"
+    script:
+      "src/data/create_diversity_indexes.R"
+
+

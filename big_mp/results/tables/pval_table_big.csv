@@ -1,0 +1,5 @@
+Type,C_vs_A,C_vs_MP,A_vs_MP
+"Chao1, bacteria",1,1,1
+"Shannon, bacteria",0.5709476282231701,0.8228438228438228,1
+"Chao1, eukaryotes",1,0.5571338413343985,0.26655872543714887
+"Shannon, eukaryotes",0.06969191798913162,1,9.742579402022126e-4
